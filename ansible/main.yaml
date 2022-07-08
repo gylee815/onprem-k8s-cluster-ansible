@@ -1,0 +1,246 @@
+---
+- name: k8s cluster install
+  hosts: control-plane
+  # become: yes
+  
+  # environment:
+  #   NVM_DIR: /var/local/nvm
+  #   PATH: /var/local/nvm/versions/node/v4.2.1/bin:{{ ansible_env.PATH }}
+  #   PATH: $PATH:$HOME/bin
+    
+  tasks:
+    - name: Update the /etc/hosts file with node name
+      tags: etchostsupdate
+      lineinfile:
+        path: "/etc/hosts"
+        regexp: ".*\t{{ hostvars[item]['ansible_hostname']}}\t{{ hostvars[item]['ansible_hostname']}}"
+        line: "{{ hostvars[item]['ansible_env'].SSH_CONNECTION.split(' ')[2] }}\t{{ hostvars[item]['ansible_hostname']}}"
+        state: present
+        backup: yes
+      register: etchostsupdate
+      when: ansible_hostname != "{{ item }}" or ansible_hostname == "{{ item }}"
+      with_items: "{{groups['control-plane']}}"
+    
+    - name: set env var to install crio
+      lineinfile:
+        path: '/etc/hosts'
+        line: "{{ control_plane_vip_etc_hosts }}\tapi.k8s.local # vip"
+        insertafter: EOF
+        state: present
+ 
+    - name: copy configuration files befor install crio
+      copy:
+        src: "{{item['src']}}"
+        dest: "{{item['dest']}}"
+        owner: root
+        group: root
+        mode: 0644
+      with_items:
+        - src: ./configurations/crio/99-kubernetes-crio.conf
+          dest: /etc/sysctl.d/99-kubernetes-crio.conf
+        - src: ./configurations/crio/k8s.conf
+          dest: /etc/sysctl.d/k8s.conf
+        - src: ./configurations/crio/crio.conf
+          dest: /etc/modules-load.d/crio.conf
+          
+    - name: restart kernal module to set crio configuration
+      ansible.builtin.shell:
+        cmd: sysctl --system
+        
+    - name: set env var to install crio
+      lineinfile:
+        path: '/root/.bash_profile'
+        line: "PATH=$PATH:$HOME/bin\nCRIO_VERSION=1.24\nCRIO_OS=CentOS_8\nexport PATH"
+        insertafter: EOF
+        state: present
+        
+    - name: set .bash_profile
+      shell: source /root/.bash_profile  && echo $CRIO_OS
+      
+    - name: set centos_8 container repo
+      ansible.builtin.command: curl -L -o /etc/yum.repos.d/devel:kubic:libcontainers:stable.repo https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/{{ crio_os }}/devel:kubic:libcontainers:stable.repo
+      # vars:
+      #   crio_os: CentOS_8
+    
+    - name: set crio yum repo
+      ansible.builtin.command: curl -L -o /etc/yum.repos.d/devel:kubic:libcontainers:stable:cri-o:{{ crio_version }}.repo https://download.opensuse.org/repositories/devel:kubic:libcontainers:stable:cri-o:{{ crio_version }}/{{ crio_os }}/devel:kubic:libcontainers:stable:cri-o:{{ crio_version }}.repo
+      # vars:
+      #   crio_os: CentOS_8
+      #   crio_version: 1.24
+        
+    - name: yum install crio,crictl
+      yum:
+        name: 
+          - cri-o
+          - crictl
+          
+    - name: crio service start
+      service:
+        name: crio
+        state: started
+        enabled: true
+    
+    - name: copy configuration files for ipvs mode in k8s cluster(kube-proxy)
+      copy:
+        src: ./configurations/ipvs/ipvs.modules
+        dest: /etc/sysconfig/modules/ipvs.modules
+        owner: root
+        group: root
+        mode: 0755
+        
+    - name: bash execute ipvs.modules
+      ansible.builtin.shell: /etc/sysconfig/modules/ipvs.modules
+      args:
+        executable: /bin/bash
+    
+    - name: yum install ipvsadm, ipset
+      yum:
+        name: 
+          - ipvsadm
+          - ipset
+          
+    - name: copy all configurations file for k8s(copy recursively) contains kube-vip, network(firewall), kubeadm.yaml, kubeadm-join.yaml, sh-script
+      copy:
+        src: ./configurations/kubernetes
+        dest: /root/
+        directory_mode:
+        owner: root
+        group: root
+        mode: 0755
+        
+    - name: fix firewall_k8s sh script to add local ip range
+      ansible.builtin.shell: find /root/kubernetes/network -name firewall_k8s.sh -exec sed -i -e 's/K8S_LOCAL_IP_RANGE/{{ local_ip_range }}/g' {} \;
+      # vars:
+      #   local_ip_range: 10\.210\.180\.0\/24
+        
+    - name: fix kube-vip.yaml to add control-plane vip
+      ansible.builtin.shell: find /root/kubernetes/kube-vip -name kube-vip.yaml -exec sed -i -e 's/CONTROL_PLANE_VIP/{{ control_plane_vip }}/g' {} \;
+      # vars:
+      #   control_plane_vip: 10\.210\.180\.5
+  
+    - name: fix kube-vip.yaml to add control-plane vip
+      ansible.builtin.shell: find /root/kubernetes -name kubeadm.yaml -exec sed -i -e 's/CONTROL_PLANE_VIP/{{ control_plane_vip }}/g' -e 's/MRMP_LA01_LOCAL_IP/{{ mrmp_la01_ip }}/g' -e 's/MRMP_LA02_LOCAL_IP/{{ mrmp_la02_ip }}/g' -e 's/MRMP_LD01_LOCAL_IP/{{ mrmp_ld01_ip }}/g'  {} \;
+      # vars:
+      #   control_plane_vip: 10\.210\.180\.5
+      #   mrmp_la01_ip: 10\.210\.180\.6
+      #   mrmp_la02_ip: 10\.210\.180\.4
+      #   mrmp_ld01_ip: 10\.210\.180\.8
+        
+    - name: execute shell script to set firewalld for k8s cluster
+      ansible.builtin.shell: /root/kubernetes/network/firewall_k8s.sh
+      args:
+        executable: /bin/bash
+    
+    - name: disable SELinux SELINUX change to permissive mode
+      ansible.builtin.shell: setenforce 0 && sed -i 's/^SELINUX=enforcing$/SELINUX=permissive/' /etc/selinux/config
+    
+    - name: swap off
+      ansible.builtin.shell: swapoff -a && sed -i '/ swap / s/^/#/' /etc/fstab
+      
+    - name: add kubernetes yum repo
+      ansible.builtin.shell: |
+        cat <<EOF > /etc/yum.repos.d/kubernetes.repo
+        [kubernetes]
+        name=Kubernetes
+        baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-x86_64
+        enabled=1
+        gpgcheck=1
+        repo_gpgcheck=1
+        gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+        EOF
+        
+    - name: yum install crio,crictl
+      yum:
+        name: 
+          - kubelet
+          - kubeadm
+          - kubectl
+        disable_excludes: kubernetes
+
+    - name: copy kube-vip.yaml to /etc/kubernetes/mainfest/ to add static pod
+      ansible.builtin.shell: cp /root/kubernetes/kube-vip/kube-vip.yaml /etc/kubernetes/manifests/ && chmod 644 /etc/kubernetes/manifests/kube-vip.yaml
+
+    - name: add /proc/sys/net/bridge/bridge-nf-call-iptables as 1
+      ansible.builtin.shell: echo 1 > /proc/sys/net/bridge/bridge-nf-call-iptables
+
+- name: create k8s cluster users
+  hosts: mrmp-la01
+
+  tasks:
+
+    - name: Ensure group "lge-users" exists
+      ansible.builtin.group:
+        name: lge-users
+        state: present
+
+    - name: Add the user 'lge-cpl' with a secondary group of 'lge-users'
+      ansible.builtin.user:
+        name: lge-cpl
+        comment: k8s user for thingq to work in lge-cpl namespace
+        groups: lge-users
+
+    - name: Add the user 'lge-ctofms' with a secondary group of 'lge-users'
+      ansible.builtin.user:
+        name: lge-ctofms
+        comment: k8s user for fms to work in lge-ctofms namespace
+        groups: lge-users
+
+- name: configuration for k8s worker node
+  hosts: worker-node
+
+  tasks:
+
+    - name: make log directory for robot-control-be 
+      ansible.builtin.file:
+        path: /mnt/k8s/lge-robot/be
+        state: directory
+        mode: '0755'
+    
+    - name: make log directory for robot-control-map 
+      ansible.builtin.file:
+        path: /mnt/k8s/lge-robot/map
+        state: directory
+        mode: '0755'
+
+    - name: make prometheus directory for prometheus-server-pv
+      ansible.builtin.file:
+        path: /mnt/k8s/prometheus/server
+        state: directory
+        mode: '0755'
+
+    - name: make prometheus directory for prometheus-alertmanager-pv
+      ansible.builtin.file:
+        path: /mnt/k8s/prometheus/alertmanager
+        state: directory
+        mode: '0755'
+
+    - name: make 1st directory for minio-pv 
+      ansible.builtin.file:
+        path: /mnt/miniohdd/data1
+        state: directory
+        mode: '0755'
+
+    - name: make 2nd directory for minio-pv 
+      ansible.builtin.file:
+        path: /mnt/miniohdd/data2
+        state: directory
+        mode: '0755'
+
+    - name: make log backup directory for robot-control-be and robot-control-map 
+      ansible.builtin.file:
+        path: /root/lge-robot-log-backup
+        state: directory
+        mode: '0755'
+
+    - name: Creates an entry like "PATH=/usr/bin:/usr/local/bin" on top of crontab
+      ansible.builtin.cron:
+        name: PATH
+        env: yes
+        job: /usr/bin:/usr/local/bin
+
+    - name: Ensure a job that runs at UTC 00:10 everyday. Creates an entry like "0 10 * * * robot-control-onprem-log-backup.sh &>> robot-control-onprem-log-backup.log"
+      ansible.builtin.cron:
+        name: "backup log & delete empty and old log files "
+        minute: "10"
+        hour: "0"
+        job: "/root/kubernetes/sh-script/robot-control-onprem-log-backup.sh &>> /root/kubernetes/sh-script/logs/robot-control-onprem-log-backup.log"

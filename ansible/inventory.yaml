@@ -1,0 +1,20 @@
+---
+all:
+  hosts:
+    mrmp-la01:
+    mrmp-la02:
+    mrmp-ld01:
+  children:
+    control-plane:
+      hosts:
+        mrmp-la01:
+        mrmp-la02:
+        mrmp-ld01:
+    worker-node:
+      hosts:
+        mrmp-la01:
+        mrmp-la02:
+    k8s-cluster:
+      children:
+        control-plane:
+        worker-node:

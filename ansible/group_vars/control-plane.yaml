@@ -1,0 +1,9 @@
+---
+control_plane_vip_etc_hosts: 10.210.180.5
+crio_os: CentOS_8
+crio_version: 1.24
+local_ip_range: 10\.210\.180\.0\/24
+control_plane_vip: 10\.210\.180\.5
+mrmp_la01_ip: 10\.210\.180\.6
+mrmp_la02_ip: 10\.210\.180\.4
+mrmp_ld01_ip: 10\.210\.180\.8

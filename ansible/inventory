@@ -1,0 +1,12 @@
+[control-plane]
+10.210.180.4
+10.210.180.6
+10.210.180.8
+
+[worker-node]
+10.210.180.4
+10.210.180.6
+
+[k8s-cluster:children]
+control-plane
+worker-node

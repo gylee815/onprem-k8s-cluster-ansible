@@ -1,0 +1,17 @@
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: JoinConfiguration
+discovery:
+  bootstrapToken:
+    token: onprem.1357902468onprem
+    apiServerEndpoint: "api.k8s.local:6443"
+    caCertHashes: ["CA_CERT_HASHES"]
+nodeRegistration:
+  name: HOSTNAME
+  taints: []
+  kubeletExtraArgs:
+    node-labels: "node.kubernetes.io/worker=,node.kubernetes.io/master*="
+controlPlane:
+  localAPIEndpoint:
+    advertiseAddress: LOCAL_IP_ADDR
+    bindPort: 6443
+  certificateKey: "CERT_KEY"
