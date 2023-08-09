@@ -9,5 +9,5 @@ ex> docker run -it -v test:/home/ansible  ansible_rocky:0.1 /bin/bash
 
 ## Docker bind mount on windows
 
-docker run -it -v "//c/[PATH_FOR_LOCAL_DIR]:[DOCKER_DIR]" [DOCKER_IMAGE]
+docker run -it -w [DOCKER_DIR] -v "//c/[PATH_FOR_LOCAL_DIR]" [DOCKER_IMAGE]
 ex> docker run -it -w /home/ansible -v "//c/Users/User/Documents/Work/Docker/ansible/
